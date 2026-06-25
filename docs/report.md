@@ -1,75 +1,83 @@
-# Synthetic Eye-Tracking Data — What We Generate, Why, and How
+# Synthetic Eye-Tracking Data for Reading: Generation, Parameterization, and Grounding
 
 [TOC]
 
-This report explains the **synthetic eye-tracking data** produced by this project: what the
-data looks like (with visualizations), the **empirical/literature grounding** behind the
-parameters, the **two generative models** (rule-based and model-based), and how the generators
-are **parameterized to produce individual (participant-level) diversity**.
+This report describes the synthetic eye-tracking data produced by this project. It covers what
+the data contains, how the two generators work, how participant-level variability is
+parameterized, what empirical literature the parameter choices draw on, and where the current
+implementation falls short. Figures and statistics come from a single seeded run of
+`scripts/make_report_figures.py` (`seed = 42`); rerunning reproduces them exactly.
 
-All figures below were produced by `scripts/make_report_figures.py` from a reproducible run
-(`seed = 42`).
-
-> **Run summary.** 40 simulated participants × 5 stimuli × 6 trials/participant.
-> Reading-grid stimuli with **96 AOIs** each (8 lines × 12 words).
-> Output: **67,279** rule-based events and **1,451,051** raw-gaze samples at **120 Hz**.
+> Run summary: 40 simulated participants, 5 stimuli, 6 trials per participant. Each stimulus is a
+> reading grid of 96 AOIs (8 lines × 12 words). The run produced 67,279 rule-based events and
+> 1,451,051 raw-gaze samples at 120 Hz.
 
 ---
 
-## 1. What kind of data is generated?
+## 1. What the data contains
 
-The generators emit three views of the *same* underlying behavior, all sharing one schema so
-rule-based and model-based output are directly comparable:
+Each generator emits three views of the same simulated behavior, sharing one schema so that
+rule-based and model-based output can be compared directly.
 
-| Data view | Granularity | Key columns | Use |
-|-----------|-------------|-------------|-----|
-| **Event-level** | one row per fixation / saccade / blink | `event_type`, `start/end/duration_ms`, `x_px`, `y_px`, `aoi_id`, `saccade_amp_px`, `saccade_angle_deg`, `validity` | the primary, interpretable representation |
-| **Raw gaze time-series** | one row per sample (120 Hz) | `timestamp_ms`, `x_px`, `y_px`, `pupil_size`, `validity`, `event_index` | mimics what a real tracker streams |
-| **AOI summary** | one row per (participant × trial × AOI) | `first_fixation_duration_ms`, `total_fixation_duration_ms`, `fixation_count`, `visit_count`, `time_to_first_fixation_ms`, `regression_count` | the reading-research feature set |
+| View | Granularity | Key columns | Role |
+|------|-------------|-------------|------|
+| Event-level | one row per fixation / saccade / blink | `event_type`, `start/end/duration_ms`, `x_px`, `y_px`, `aoi_id`, `saccade_amp_px`, `saccade_angle_deg`, `validity` | the interpretable primary representation |
+| Raw gaze | one row per sample (120 Hz) | `timestamp_ms`, `x_px`, `y_px`, `pupil_size`, `validity`, `event_index` | approximates a tracker's sample stream |
+| AOI summary | one row per (participant × trial × AOI) | `first_fixation_duration_ms`, `total_fixation_duration_ms`, `fixation_count`, `visit_count`, `time_to_first_fixation_ms`, `regression_count` | the reading-research feature set |
 
-A core design principle is **event-first generation**: we build interpretable fixation/saccade
-events, then *expand* them into a raw 120 Hz signal — rather than synthesizing raw gaze directly.
+The generators build event-level data first and then expand it into a raw 120 Hz signal, rather
+than synthesizing the raw signal directly. Working at the event level keeps the generative
+assumptions explicit and lets the same events drive both the raw stream and the AOI summaries.
 
 ### 1.1 Stimulus: the reading-grid AOI layout
 
-Stimuli model a page of text as a grid of word-level Areas of Interest (AOIs), laid out
-left→right, top→bottom. Each AOI carries a **difficulty** value that modulates fixation behavior.
+A stimulus represents a page of text as a grid of word-level Areas of Interest (AOIs), arranged
+left to right and top to bottom. Each AOI is assigned a difficulty value that scales fixation
+behavior on that word. Note that these AOIs are abstract cells, not real words; difficulty is
+drawn at random rather than derived from word length or frequency (see Section 6).
 
 ![Reading-grid AOI layout](assets/aoi_layout.png)
 
 ### 1.2 Raw gaze time-series (120 Hz)
 
-Events are expanded to a continuous signal: fixation samples sit near the AOI center (+noise),
-saccade samples interpolate between fixations, and **blink/missing** samples are set to `NaN`
-with `validity = 0` (red lines below).
+The expansion places fixation samples near the AOI centre with added noise, interpolates saccade
+samples linearly between successive fixations, and marks blink and missing samples as `NaN` with
+`validity = 0` (red lines below).
 
 ![Raw gaze time-series](assets/raw_gaze.png)
 
 ---
 
-## 2. Visualizing the behavior
+## 2. The simulated behavior
 
-### 2.1 Fixation duration distribution
+### 2.1 Fixation durations
 
-Fixation durations are **right-skewed** (lognormal-like): a dense mode around the typical
-reading fixation with a long tail of longer fixations on difficult words. The realized mean
-(~323 ms) sits above the base config mean (240 ms) because durations are **scaled up by AOI
-difficulty and inverse reading speed** — exactly the mechanism that creates difficulty and
-individual effects (Sections 3–4).
+Fixation durations are right-skewed, with a mode near the typical reading fixation and a tail of
+longer fixations on harder words, which is the shape commonly modelled as lognormal or gamma. In
+this run the realized mean is about 323 ms (median 292 ms). That is higher than the 200–250 ms
+usually reported for skilled silent reading. The gap is a direct consequence of how durations are
+built: the configured 240 ms is the mean of the unscaled draw, which is then multiplied by a
+difficulty-dependent factor `(1 + 0.6·difficulty)` and divided by the participant's reading-speed
+factor. Both terms push the realized mean above the base. Recentring them would bring the mean into the empirical range; the
+current values are kept because they make the difficulty and individual effects easy to see in
+this demonstration. This is a calibration choice rather than a fit to human data (Section 6).
 
 ![Fixation duration distribution](assets/fixation_duration.png)
 
-### 2.2 Saccade amplitude distribution
+### 2.2 Saccade amplitudes
 
-Saccade amplitudes follow inter-AOI geometry: most are short forward steps to the next word,
-with a tail of long return-sweep and regression saccades.
+Saccade amplitude follows the geometry of the AOI grid. Most saccades are short forward steps to a
+nearby word; a tail of longer saccades comes from line-final return sweeps and regressions. The
+mean amplitude here is about 227 px. With roughly 110 px-wide word AOIs that is close to two
+word-widths, larger than a single forward step because the mean pools long return sweeps and
+regressions with the short forward saccades.
 
 ![Saccade amplitude distribution](assets/saccade_amplitude.png)
 
 ### 2.3 AOI transition structure
 
-The transition matrix shows the reading "ribbon": strong probability mass just off the diagonal
-(forward word-by-word movement), plus return-sweep and regression structure.
+The AOI-to-AOI transition matrix concentrates probability just off the diagonal, reflecting
+word-by-word forward movement, with additional mass for return sweeps and regressions.
 
 ![AOI transition matrix](assets/transition_matrix.png)
 
@@ -77,59 +85,76 @@ The transition matrix shows the reading "ribbon": strong probability mass just o
 
 ## 3. The two generators
 
-Both generators implement the same interface and emit the same schema (`generate_events` →
-`generate_raw_gaze` → `generate_aoi_summary`). The guiding philosophy is **explainable-first**.
+Both generators share an interface (`generate_events` → `generate_raw_gaze` →
+`generate_aoi_summary`) and emit the same schema. Each step is a named, inspectable operation,
+which keeps the generative assumptions easy to audit.
 
 ### 3.1 Rule-based generator
 
-Synthesizes behavior from explicit assumptions and distributions (no training data required):
+The rule-based generator synthesizes behavior from explicit assumptions and distributions and
+needs no training data.
 
-1. **Participants** — each gets a trait vector (Section 4) sampled from configured distributions.
-2. **Stimuli & AOIs** — reading-grid layout with per-AOI difficulty.
-3. **Scanpath** — an AOI-to-AOI walk that is *forward-dominant* but probabilistically **skips**
-   ahead, **regresses** to earlier words, and performs **line breaks** (return sweeps). The
-   probabilities are modulated by the participant's `regression_tendency` / `skip_tendency`.
-4. **Fixations** — placed at AOI center + Gaussian noise; duration drawn from a (truncated)
-   lognormal, **scaled by AOI difficulty and the participant's reading speed**.
-5. **Saccades** — inserted between fixations; amplitude = inter-fixation distance, duration from a
-   truncated normal, velocity = amplitude/duration, angle = `atan2(dy, dx)`.
-6. **Blinks / missing** — inserted per the blink rate; corresponding raw samples are nulled.
+1. Participants. Each participant receives a trait vector (Section 4) sampled from the configured
+   population distributions.
+2. Stimuli and AOIs. A reading-grid layout is built, with a difficulty value per AOI.
+3. Scanpath. An AOI-to-AOI walk is generated. It is forward-dominant but moves to a skipped word,
+   regresses to an earlier word, or breaks to the next line with configurable probabilities, which
+   are adjusted by the participant's `regression_tendency` and `skip_tendency`.
+4. Fixations. A fixation is placed at the AOI centre plus Gaussian noise, whose spread also grows
+   with AOI difficulty. The duration is drawn from a truncated lognormal and then multiplied by
+   `(1 + 0.6·difficulty)` and divided by the reading-speed factor.
+5. Saccades. Between consecutive fixations a saccade is inserted, with amplitude equal to the
+   inter-fixation distance, duration from a truncated normal, velocity equal to amplitude over
+   duration, and angle from `atan2(dy, dx)`.
+6. Blinks and missing data. Blinks are inserted at the configured rate, and the corresponding raw
+   samples are set to missing.
 
 ### 3.2 Model-based generator
 
-Learns from (pseudo-)reference data and samples — initially with **explainable statistical
-models**, no deep learning:
+The model-based generator learns from reference data and then samples. The initial version uses
+interpretable statistical models and no deep learning.
 
-- **Parametric model** — fits the marginal distributions (fixation duration: lognormal *vs*
-  gamma chosen by **AIC**; saccade duration: normal *vs* lognormal; saccade amplitude: empirical
-  quantiles; missing rate: beta), with method-of-moments / empirical fallbacks for small samples.
-- **Markov transition model** — a first-order chain over a **relative-move state space**
-  (`next`, `skip`, `regression_1`, `regression_2plus`, `line_break`, `end`), estimated from the
-  reference and sampled at generation time (Laplace-smoothed, forward-reading prior).
-- **HMM (optional)** — a Gaussian HMM over `[fixation_duration, saccade_amplitude]` with hidden
-  reading "modes" (e.g. *normal / careful / skimming / rereading*). It is opt-in and degrades
-  gracefully when `hmmlearn` is not installed (no hard dependency).
+- Parametric model. Fits the marginal distributions: fixation duration (lognormal or gamma,
+  selected by AIC), saccade duration (normal or lognormal), saccade amplitude (empirical
+  quantiles), and missing rate (beta), with method-of-moments or empirical fallbacks when a sample
+  is small.
+- Markov transition model. A first-order chain over a relative-move state space (`next`, `skip`,
+  `regression_1`, `regression_2plus`, `line_break`, `end`), estimated from the reference with
+  Laplace smoothing and a forward-reading prior, then sampled at generation time.
+- HMM (optional). A Gaussian HMM over `[fixation_duration, saccade_amplitude]` with a few hidden
+  reading modes (for example normal, careful, skimming, rereading). It is opt-in and skipped when
+  `hmmlearn` is absent, so it is not a hard dependency.
 
-### 3.3 How well does the model reproduce the reference?
+### 3.3 Recovering a known generating process
 
-Fitting the model-based generator on the rule-based output and comparing distributions:
+The table below fits the model-based generator on the rule-based output and compares the two.
 
-| Quantity | KS statistic | Notes |
-|----------|--------------|-------|
-| Fixation duration | **0.018** | near-identical marginal (Wasserstein ≈ 5.1 ms) |
-| Saccade amplitude | **0.159** | close; small shape differences |
-| AOI transition matrix | distance ≈ **1.51** (Frobenius) | structure preserved; scanpaths terminate earlier under the learned Markov model |
+| Quantity | KS statistic | Note |
+|----------|--------------|------|
+| Fixation duration | 0.018 | very close marginal (Wasserstein ≈ 5.1 ms) |
+| Saccade amplitude | 0.159 | close, with minor shape differences |
+| AOI transition matrix | Frobenius distance ≈ 1.51 | qualitatively similar; see caveat below |
 
-The marginal distributions match very closely; the main divergence is **scanpath length**, an
-*expected* consequence of the learned termination behavior rather than a correctness issue.
+These numbers should be read with care. The reference here is the rule-based generator's own
+output, so the comparison measures how faithfully the parametric and Markov models recover a
+*known* generating process, not how well either matches human reading. Close agreement on the
+marginals is partly expected for that reason, and we report it only as a sanity check on the
+fitting pipeline. External validation against a public human dataset is part of M3 and has not
+been done yet.
+
+Two differences remain even in this internal comparison. The model produced 25,310
+events against the rule-based 67,279, and scanpaths under the learned Markov chain terminate
+earlier than the near-complete grid sweeps of the rule-based source. The transition-matrix
+distance is a single aggregate that also depends on how the two AOI sets are aligned, so it is
+indicative rather than precise.
 
 ---
 
-## 4. Parameterizing individual diversity
+## 4. Parameterizing individual variability
 
-A central goal is that synthetic *participants differ from one another* in psychologically
-meaningful ways. Each participant is assigned a **trait vector**, sampled from configurable
-population distributions:
+A goal of the generator is that simulated participants differ from one another in behaviorally
+distinct ways. Each participant is given a trait vector sampled from configurable population
+distributions.
 
 | Trait | Meaning | Sampled range (this run) |
 |-------|---------|--------------------------|
@@ -137,96 +162,99 @@ population distributions:
 | `regression_tendency` | propensity to re-read earlier words | 0.03 – 0.24 |
 | `fixation_noise_sd` | spatial imprecision of fixations (px) | 0.5 – 14.4 |
 | `missing_rate` | blink / data-loss rate | 0.00 – 0.08 |
-| `skip_tendency` | propensity to skip words | configurable |
+| `skip_tendency` | propensity to skip words | derived from `skip_prob` + noise |
 | `pupil_baseline` | baseline pupil size | configurable |
 
 ![Participant trait distributions](assets/participant_traits.png)
 
-Crucially, these parameters are **not cosmetic** — they translate into observable behavioral
-differences. Faster readers produce shorter fixations; higher regression tendency produces more
-regressive saccades:
+These parameters are not cosmetic: they map onto measurable differences in the output. Faster
+readers produce shorter fixations, and participants with a higher regression tendency produce more
+regressive saccades.
 
-![Parameters drive behavioral diversity](assets/diversity_effect.png)
+![Parameters map to behavioral differences](assets/diversity_effect.png)
 
-This is also visible qualitatively in individual scanpaths — a fast, low-regression reader sweeps
-cleanly left-to-right, while a high-regression reader's path is full of backward jumps:
+The realized regression rate in the right-hand panel is an angle-based proxy (the fraction of
+saccades pointing leftward or upward, here taken as `|angle| > 120°`). It is a rough operational
+measure rather than the linguistically defined regression rate, and the high-regression simulated
+readers deliberately exceed the 10–15% typical of skilled reading to make the effect visible.
+
+The same contrast appears in individual scanpaths. A fast, low-regression reader sweeps fairly
+cleanly from left to right, while a high-regression reader's path contains many backward jumps.
 
 ![Example scanpaths](assets/scanpaths.png)
 
-Beyond participant-level variability, **stimulus-level difficulty** (per-AOI `difficulty`)
-lengthens fixations and increases regressions on hard words, so the same participant behaves
-differently across easy vs hard text.
+Variability also comes from the stimulus side: per-AOI difficulty lengthens fixations and raises
+regressions on harder words, so a given participant behaves differently across easier and harder
+text.
 
 ---
 
-## 5. Literature grounding
+## 5. Grounding in the reading literature
 
-The parameter defaults are grounded in the classic reading eye-movement literature. The four
-canonical anchors (Rayner 1998/2009; E-Z Reader, Reichle et al. 1998; SWIFT, Engbert et al. 2005)
-were citation-verified for venue/year. Where a default is a defensible *modeling convention*
-rather than a single sourced number, this is stated explicitly.
+The parameter defaults draw on the classic reading eye-movement literature. The four main anchors
+(Rayner 1998 and 2009; the E-Z Reader model, Reichle et al. 1998; the SWIFT model, Engbert et al.
+2005) were checked for venue and year. Where a default is a modelling convention rather than a
+single sourced number, the table says so.
 
-### Empirical parameter grounding
+### 5.1 Empirical parameter grounding
 
 | Generator parameter (default) | Literature value / finding | Source | Note |
 |---|---|---|---|
-| Fixation duration ~240 ms mean, right-skewed, ~80–800 ms | Mean fixation in silent reading ≈ 200–250 ms; positively-skewed; long tail | Rayner (1998); Rayner (2009) | 240 ms is within the cited mean range. Lognormal/gamma captures the right skew (Holmqvist et al., 2011). The 80–800 ms clipping is a generous range, not a single sourced number. |
-| Saccade duration ~35 ms | Duration scales with amplitude; reading saccades ~20–40 ms (~30 ms typical) | Rayner (1998); Holmqvist et al. (2011) | 35 ms is a reasonable fixed proxy for an amplitude-dependent (main-sequence) duration. Modeling choice. |
-| Saccade amplitude ~7–9 char spaces (~2°) | Mean forward saccade ≈ 7–9 letter spaces in alphabetic reading | Rayner (1998); Rayner (2009) | Directly sourced. Char-space ↔ degrees depends on font size / viewing distance, so ~2° is approximate. |
-| Amplitude tied to inter-word distance | Landing near word center (preferred viewing location); length governed by word boundaries | Rayner (1998); Reichle et al. (1998); Engbert et al. (2005) | Mechanistically motivated by E-Z Reader and SWIFT. |
-| Regression rate ~10–15% of saccades | ~10–15% of saccades in skilled reading; rises with difficulty | Rayner (1998); Rayner (2009) | Directly within the cited range. |
-| Word skipping ~8% | Strongly a function of word length/predictability: short words skipped ~60–70%, long ~20% | Rayner & McConkie (1976); Rayner et al. (2011) | A single 8% scalar is a simplification; literature favors length/frequency-conditioned skipping. Flagged as a baseline. |
-| Forward dominance ~78% of transitions | Reading is predominantly forward; with ~10–15% regressions + re-fixations, forward transitions dominate | Rayner (1998); Rayner (2009) | 78% is a derived value consistent with reported regression rates, not a directly quoted figure. |
-| Blink / missing data | Blinks and tracker loss are standard sources of missing samples | Holmqvist et al. (2011) | No canonical "reading blink rate"; treated as a realism feature, not a sourced constant. |
-| Pupil baseline & variability | Pupil diameter is task-/luminance-dependent; an index of cognitive load | Holmqvist et al. (2011) | No universal baseline; justified as a configurable, individually-varying parameter. |
-| Individual differences in reading speed | Large, documented variation in reading rate; models fit per-reader parameters | Rayner (1998, 2009); Engbert et al. (2005) | Supports per-individual parameterization (reader-level random effects). |
-| Text-difficulty effects on fixations | Fixations lengthen, regressions increase with lexical/syntactic/conceptual difficulty | Rayner (1998); Rayner (2009) | Supports conditioning fixation durations on difficulty. |
-| AOI / interest-area methodology | Word/region interest areas are the standard unit (first-fixation, gaze duration, total time, regressions) | Holmqvist et al. (2011); Rayner (1998) | Methodologically grounded. |
-| Fixation/saccade segmentation | Velocity-threshold (I-VT) and dispersion-threshold (I-DT) are the standard taxonomy | Salvucci & Goldberg (2000) | Standard methods for deriving events from samples. |
+| Fixation duration ~240 ms mean, right-skewed, ~80–800 ms | Mean fixation in silent reading ≈ 200–250 ms; positively skewed; long tail | Rayner (1998); Rayner (2009) | 240 ms is within the cited mean range. Lognormal/gamma captures the right skew (Holmqvist et al., 2011). The 80–800 ms clipping is a generous range, not a sourced number. |
+| Saccade duration ~35 ms | Duration scales with amplitude; reading saccades ~20–40 ms (~30 ms typical) | Rayner (1998); Holmqvist et al. (2011) | 35 ms is a fixed proxy for an amplitude-dependent duration; a modelling choice (see Section 6). |
+| Saccade amplitude ~7–9 char spaces (~2°) | Mean forward saccade ≈ 7–9 letter spaces in alphabetic reading | Rayner (1998); Rayner (2009) | Directly sourced. The char-space to degree conversion depends on font size and viewing distance, so ~2° is approximate. |
+| Amplitude tied to inter-word distance | Landing near word centre (preferred viewing location); length governed by word boundaries | Rayner (1998); Reichle et al. (1998); Engbert et al. (2005) | Motivated by E-Z Reader and SWIFT. |
+| Regression rate ~10–15% of saccades | ~10–15% of saccades in skilled reading; rises with difficulty | Rayner (1998); Rayner (2009) | Within the cited range. |
+| Word skipping ~8% | Strongly a function of word length and predictability: short words skipped ~60–70%, long ~20% | Rayner & McConkie (1976); Rayner et al. (2011) | A single 8% rate is a simplification; the literature favours length- and frequency-conditioned skipping. Flagged as a baseline. |
+| Forward dominance ~78% of transitions | Reading is predominantly forward; with ~10–15% regressions and some re-fixations, forward transitions dominate | Rayner (1998); Rayner (2009) | 78% is a derived value consistent with reported regression rates, not a quoted figure. |
+| Blink / missing data | Blinks and tracker loss are standard sources of missing samples | Holmqvist et al. (2011) | No canonical reading blink rate; treated as a realism feature. |
+| Pupil baseline & variability | Pupil diameter is task- and luminance-dependent; an index of cognitive load | Holmqvist et al. (2011) | No universal baseline; a configurable, individually varying parameter. |
+| Individual differences in reading speed | Large, documented variation in reading rate; models fit per-reader parameters | Rayner (1998, 2009); Engbert et al. (2005) | Supports per-individual parameterization. |
+| Text-difficulty effects on fixations | Fixations lengthen and regressions increase with lexical, syntactic, and conceptual difficulty | Rayner (1998); Rayner (2009) | Supports conditioning fixation durations on difficulty. |
+| AOI / interest-area methodology | Word or region interest areas are the standard unit (first-fixation, gaze duration, total time, regressions) | Holmqvist et al. (2011); Rayner (1998) | Methodologically grounded. |
+| Fixation/saccade segmentation | Velocity-threshold (I-VT) and dispersion-threshold (I-DT) identification | Salvucci & Goldberg (2000) | Standard methods for deriving events from samples. |
 
-### Computational models of reading eye movements
+### 5.2 Computational models of reading eye movements
 
-**E-Z Reader** (Reichle, Pollatsek, Fisher & Rayner, 1998) is a serial-attention model in which
-lexical processing drives the eyes: a "familiarity check" triggers saccade programming, while full
-lexical access shifts attention to the next word. It reproduces frequency/predictability effects on
-fixation durations, skipping, and re-fixations with a small set of interpretable parameters.
-**SWIFT** (Engbert, Nuthmann, Richter & Kliegl, 2005) is a competing *dynamical* model assuming
-spatially distributed (parallel) lexical processing across the perceptual span, with autonomous,
-stochastically-timed saccade generation. Both are mechanistic process models validated against
-corpus distributions — the gold standard for explaining *why* reading eye movements have the
-statistics they do.
+E-Z Reader (Reichle, Pollatsek, Fisher & Rayner, 1998) is a serial-attention model in which
+lexical processing drives the eyes: a familiarity check on the attended word triggers saccade
+programming, and full lexical access shifts attention to the next word. It reproduces frequency and
+predictability effects on fixation durations, skipping, and re-fixations from a small set of
+interpretable parameters. SWIFT (Engbert, Nuthmann, Richter & Kliegl, 2005) is a dynamical
+alternative that assumes spatially distributed, parallel lexical processing across the perceptual
+span, with autonomous and stochastically timed saccade generation. Both are mechanistic process
+models validated against corpus distributions, and both explain *why* reading eye movements have
+the statistics they do.
 
-Simpler **Markov / HMM scanpath models** sit at a different abstraction level: rather than
-simulating cognition, they model the *sequence* of states (forward step, skip, re-fixation,
-regression) as transition probabilities, optionally with hidden reading-mode states. They are
-descriptive and data-light but transparent, fast to fit, and easy to validate against transition
-rates. This motivates our **M2 design — parametric + Markov ("explainable-first")**: parametric
-distributions reproduce the marginals grounded in Rayner (1998/2009), while the Markov layer
-reproduces sequential structure (forward dominance, regression/skip rates). Every knob maps to a
-reported empirical quantity — a deliberate trade of E-Z Reader/SWIFT's deeper cognitive fidelity
-for interpretability and controllability appropriate to a synthetic-data generator.
+Markov and HMM scanpath models work at a different level. Instead of simulating cognition, they
+treat the sequence of moves (forward step, skip, re-fixation, regression) as transition
+probabilities, optionally with hidden states for reading mode. They are descriptive and need
+little data, but they are transparent and quick to fit and validate against transition rates. This
+is the reasoning behind the M2 design: parametric distributions reproduce the marginal statistics
+grounded in Rayner (1998, 2009), and a Markov layer reproduces the sequential structure (forward
+dominance, regression and skip rates). The generator gives up the cognitive fidelity of E-Z Reader
+and SWIFT for parameters that are easy to interpret and control, which suits a synthetic-data tool.
 
-### Synthetic data & privacy
+### 5.3 Synthetic data and privacy
 
-Eye-movement recordings are increasingly understood to be **biometric**: reading scanpaths and
-oculomotor dynamics can re-identify individuals at high accuracy (Holland & Komogortsev, 2011;
-Jäger et al., 2020). Raw or lightly de-identified gaze data therefore carries genuine
-re-identification risk, and aggregation (e.g. heatmaps) does not by itself guarantee anonymity.
-Two responses are relevant. First, **formal privacy mechanisms**: Steil et al. (2019) applied
-differential privacy to aggregated eye-movement features; Bozkir et al. (2021) addressed temporal
-correlations that weaken naive DP; and DP *synthesis* approaches generate gaze under DP guarantees.
-Second, **synthetic data as a privacy tool**: David-John et al. (2022, "For Your Eyes Only") study
-privacy/utility trade-offs in eye-tracking datasets. The implication for this project: a generator
-should be evaluated not only on statistical fidelity but with a **privacy-proxy evaluation** —
-confirming synthetic samples do not enable re-identification back to any source individual — because
-plausible-looking gaze can still leak identity if it preserves person-specific signatures. This is
-exactly why the evaluation framework includes nearest-neighbor distance, a re-identification proxy,
-and a membership-inference proxy.
+Eye-movement recordings carry biometric information: reading scanpaths and oculomotor dynamics can
+re-identify individuals at high accuracy (Holland & Komogortsev, 2011; Jäger et al., 2020). Raw or
+lightly de-identified gaze therefore carries genuine re-identification risk, and aggregation such
+as heatmaps does not by itself guarantee anonymity. Two lines of work respond to this. The first
+applies formal privacy mechanisms: Steil et al. (2019) used differential privacy on aggregated
+eye-movement features, and Bozkir et al. (2021) addressed the temporal correlations that weaken
+naive differential privacy. The second treats synthetic data as a privacy tool and studies the
+privacy-utility trade-off, for example David-John et al. (2022). The implication for this project
+is that a generator should be judged not only on statistical fidelity but with a privacy-proxy
+evaluation that checks whether synthetic samples can be traced back to a source individual, since
+realistic gaze can still leak identity if it preserves person-specific signatures. The evaluation
+module includes three such proxies: nearest-neighbour distance, a re-identification proxy, and a
+membership-inference proxy.
 
-### References
+### 5.4 References
 
-> Verified by search for author/title/venue/year. DOIs/URLs are included only where confirmed;
-> fields that could not be fully verified are marked *(unverified)*.
+> Checked by search for author, title, venue, and year. DOIs and URLs are included only where
+> confirmed; fields that could not be fully verified are marked *(unverified)*.
 
 - Reichle, E. D., Pollatsek, A., Fisher, D. L., & Rayner, K. (1998). Toward a model of eye movement control in reading. *Psychological Review*, 105(1), 125–157. https://doi.org/10.1037/0033-295X.105.1.125
 - Rayner, K. (1998). Eye movements in reading and information processing: 20 years of research. *Psychological Bulletin*, 124(3), 372–422. https://doi.org/10.1037/0033-2909.124.3.372
@@ -244,17 +272,44 @@ and a membership-inference proxy.
 
 ---
 
-## 6. Reproducibility
+## 6. Limitations and intended use
+
+The current implementation is a transparent baseline, not a validated model of human reading. The
+main limitations are as follows.
+
+- No external validation yet. The model-based generator has so far been fit only to rule-based
+  output, so the agreement in Section 3.3 reflects recovery of a known process. Comparison against
+  a public human dataset is deferred to M3.
+- No linguistic content. AOIs are an abstract grid, and difficulty is assigned at random rather
+  than from word length, frequency, or predictability. The lexical effects that drive E-Z Reader
+  and SWIFT are therefore not modelled, and word skipping is a flat probability rather than a
+  function of word properties.
+- Calibration. With the default multipliers the realized fixation-duration mean runs above the
+  empirical 200–250 ms, and the mean saccade amplitude is inflated by return sweeps. These are
+  tunable but are not currently fit to a target.
+- Simplified saccade dynamics. Saccade duration is drawn independently of amplitude, so there is
+  no main-sequence relationship and velocity is essentially a rescaled amplitude.
+- Memoryless transitions. The Markov model is first-order, so it cannot represent longer-range
+  dependencies such as a regression aimed at a specific earlier word, and it tends to end
+  scanpaths earlier than the rule-based source.
+- Pupil size. Pupil data appears only in the raw-gaze stream, with a generic baseline rather than
+  a luminance or cognitive-load model, and is absent from the event schema.
+
+These constraints are acceptable for the intended use of the current milestones: providing a
+reproducible, inspectable pipeline for generating and evaluating synthetic reading data, and a
+scaffold for the human-data adaptation and downstream-utility work planned for M3.
+
+---
+
+## 7. Reproducibility
 
 ```bash
 uv sync
 uv run pytest                     # 55 passed, 1 skipped
 
-# regenerate every figure + stats in this report
+# regenerate every figure and statistic in this report
 uv run python scripts/make_report_figures.py
-uv run --with markdown python scripts/build_html.py   # -> docs/index.html
+uv run --with markdown python scripts/build_html.py   # writes docs/index.html
 ```
 
-Everything is seeded (`seed = 42`), so figures and statistics regenerate identically.
-
-<p class="muted">Generated for the <code>synthetic-eye-tracking</code> project.</p>
+The run is seeded (`seed = 42`), so the figures and statistics regenerate identically.
