@@ -126,6 +126,29 @@ def evaluate(
     typer.echo(f"[evaluate] report -> {output}/quality_report.md")
 
 
+@app.command("detect-events")
+def detect_events(
+    output: Path = typer.Option(..., "--output", help="Report output directory."),
+    n_domains: int = typer.Option(8, "--n-domains", help="Domain-randomized synthetic setups."),
+    n_splits: int = typer.Option(4, "--n-splits", help="Series-grouped CV folds on real data."),
+    seed: int = typer.Option(0, "--seed"),
+) -> None:
+    """Sim-to-real fixation/saccade detection (M3-A): train on synthetic, test on real."""
+    from .detection.experiment import run_experiment
+    from .detection.report import build_detection_report
+
+    typer.echo(f"[detect-events] running sim-to-real experiment -> {output}")
+    result = run_experiment(n_domains=n_domains, n_splits=n_splits, seed=seed)
+    build_detection_report(result, output)
+    tstr = result.regimes.get("TSTR")
+    trtr = result.regimes.get("TRTR")
+    if tstr and trtr:
+        typer.echo(
+            f"[detect-events] TSTR macroF1={tstr.f1_macro:.3f} "
+            f"TRTR macroF1={trtr.f1_macro:.3f} -> {output}/detection_report.md"
+        )
+
+
 def main() -> None:  # pragma: no cover
     app()
 
