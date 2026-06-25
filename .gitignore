@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# venv / uv
+.venv/
+
+# Generated data & outputs (keep dir structure via .gitkeep)
+data/synthetic/*
+data/reports/*
+data/processed/*.pkl
+data/processed/*.csv
+!data/**/.gitkeep
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store

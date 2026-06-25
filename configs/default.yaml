@@ -1,0 +1,59 @@
+experiment:
+  seed: 42
+  n_subjects: 100
+  n_stimuli: 20
+  trials_per_subject: 20
+
+screen:
+  width_px: 1920
+  height_px: 1080
+
+sampling:
+  frequency_hz: 120
+
+stimulus:
+  layout_type: reading_grid
+  n_lines: 8
+  words_per_line: 12
+  aoi_width_px: 110
+  aoi_height_px: 36
+  line_spacing_px: 60
+  margin_left_px: 200
+  margin_top_px: 180
+
+participant_distribution:
+  reading_speed_mean: 1.0
+  reading_speed_sd: 0.2
+  fixation_noise_px_mean: 0
+  fixation_noise_px_sd: 8
+  regression_tendency_mean: 0.12
+  regression_tendency_sd: 0.05
+  missing_rate_mean: 0.03
+  missing_rate_sd: 0.02
+  pupil_baseline_mean: 3.5
+  pupil_baseline_sd: 0.4
+
+event_distribution:
+  fixation_duration_ms:
+    distribution: lognormal
+    mean: 240
+    sd: 80
+    min: 80
+    max: 800
+  saccade_duration_ms:
+    distribution: normal
+    mean: 35
+    sd: 10
+    min: 15
+    max: 80
+
+transition:
+  forward_prob: 0.78
+  skip_prob: 0.08
+  regression_prob: 0.10
+  line_break_prob: 0.04
+
+blink:
+  probability_per_trial: 0.15
+  duration_ms_mean: 120
+  duration_ms_sd: 50
