@@ -12,6 +12,7 @@ __pycache__/
 # Generated data & outputs (keep dir structure via .gitkeep)
 data/synthetic/*
 data/reports/*
+data/raw/*
 data/processed/*.pkl
 data/processed/*.csv
 !data/**/.gitkeep
