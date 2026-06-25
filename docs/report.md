@@ -4,8 +4,10 @@
 
 This report describes the synthetic eye-tracking data produced by this project. It covers what
 the data contains, how the two generators work, how participant-level variability is
-parameterized, what empirical literature the parameter choices draw on, and where the current
-implementation falls short. Figures and statistics come from a single seeded run of
+parameterized, what empirical literature the parameter choices draw on, where the current
+implementation falls short, and a first sim-to-real experiment testing whether synthetic data can
+train an event detector that transfers to real recordings. Figures and statistics come from a
+single seeded run of
 `scripts/make_report_figures.py` (`seed = 42`); rerunning reproduces them exactly.
 
 > Run summary: 40 simulated participants, 5 stimuli, 6 trials per participant. Each stimulus is a
@@ -288,7 +290,10 @@ main limitations are as follows.
   empirical 200–250 ms, and the mean saccade amplitude is inflated by return sweeps. These are
   tunable but are not currently fit to a target.
 - Simplified saccade dynamics. Saccade duration is drawn independently of amplitude, so there is
-  no main-sequence relationship and velocity is essentially a rescaled amplitude.
+  no main-sequence relationship and velocity is essentially a rescaled amplitude. The sim-to-real
+  experiment (Section 7) confirms this is the main transfer gap: synthetic-trained saccade
+  detection lags the real-trained detector by a wide margin while fixation detection nearly
+  matches it.
 - Memoryless transitions. The Markov model is first-order, so it cannot represent longer-range
   dependencies such as a regression aimed at a specific earlier word, and it tends to end
   scanpaths earlier than the rule-based source.
@@ -301,11 +306,72 @@ scaffold for the human-data adaptation and downstream-utility work planned for M
 
 ---
 
-## 7. Reproducibility
+## 7. Sim-to-real: can synthetic data train an event detector?
+
+The reason to care about synthetic gaze is data scarcity. Synthetic raw gaze comes with free,
+perfect per-sample event labels, which is the expensive part of real data to obtain. This section
+tests whether that lets synthetic data stand in for scarce hand-labelled real data on
+fixation-vs-saccade detection.
+
+Setup. The real data is Lund2013 (Andersson et al. 2017): expert hand-labelled, 500 Hz,
+free-viewing of images, dots, and video. The synthetic training data is this project's rule-based
+generator under domain randomization (8 randomized setups varying screen geometry, viewing
+distance, fixation noise, transition probabilities, and event durations, all sampled at 500 Hz).
+Both real and synthetic samples pass through the same degree-of-visual-angle, velocity-based
+feature extractor. A RandomForest classifier is trained under three regimes and scored on the same
+series-grouped held-out real folds:
+
+- TSTR: train on synthetic only, test on real (the contribution test)
+- TRTR: train on real, test on real (the practical upper bound)
+- R+S: train on real plus synthetic (augmentation)
+
+| Regime | macro F1 | balanced acc. | fixation F1 | saccade F1 |
+|--------|----------|---------------|-------------|------------|
+| TSTR | 0.717 | 0.678 | 0.948 | 0.485 |
+| TRTR | 0.942 | 0.971 | 0.985 | 0.898 |
+| R+S | 0.931 | 0.937 | 0.984 | 0.879 |
+
+![Regime comparison](assets/regime_comparison.png)
+
+Confusion matrices (row-normalized) for the synthetic-only and real-trained detectors:
+
+![TSTR confusion](assets/confusion_TSTR.png)
+![TRTR confusion](assets/confusion_TRTR.png)
+
+What the numbers say.
+
+- Synthetic-only training reaches about 76% of the real-trained macro F1 (0.717 vs 0.942) with
+  zero human labels. That result is carried almost entirely by fixation detection, which transfers
+  nearly perfectly (F1 0.948 against the real-trained 0.985).
+- Saccade detection is where synthetic falls short (0.485 vs 0.898). The synthetic saccades are too
+  idealized: their duration is drawn independently of amplitude, so there is no main-sequence
+  velocity signature, and a detector trained on them misses many real saccades. This is the most
+  actionable thing to fix next (Section 6).
+- Adding synthetic to real (R+S) did not beat real alone here (0.931 vs 0.942). The synthetic
+  training set is roughly 90× larger than the real training split and dilutes it; rebalancing or
+  sample weighting would be needed before augmentation could help.
+
+What this does and does not show. It shows that synthetic gaze with free labels is already useful
+for the label-expensive part of event detection, namely fixations, and it locates saccade
+kinematics as the realism gap to close. It is a general-domain (free-viewing) result, not
+reading-specific: no reading dataset with raw samples and hand labels was reachable in this
+environment, so a reading-domain version of this test needs such a dataset (for example
+GazeBase-TEX) or your own labelled recordings.
+
+Reproduce:
+
+```bash
+uv run synthetic-eye-tracking detect-events --output data/reports/detection
+```
+
+The command downloads Lund2013 from GitHub on first run. The full experiment is heavy (millions of
+synthetic samples trained across folds and regimes); reduce `--n-domains` for a quicker pass.
+
+## 8. Reproducibility
 
 ```bash
 uv sync
-uv run pytest                     # 55 passed, 1 skipped
+uv run pytest                     # 65 passed, 1 skipped
 
 # regenerate every figure and statistic in this report
 uv run python scripts/make_report_figures.py
