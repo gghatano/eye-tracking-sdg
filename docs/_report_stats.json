@@ -1,0 +1,45 @@
+{
+  "config": {
+    "n_subjects": 40,
+    "n_stimuli": 5,
+    "trials_per_subject": 6,
+    "frequency_hz": 120.0
+  },
+  "counts": {
+    "rule_events": 67279,
+    "model_events": 25310,
+    "rule_raw_samples": 1451051,
+    "n_participants": 40,
+    "n_aoi_per_stimulus": 96
+  },
+  "fixation_duration": {
+    "rule_mean": 323.4,
+    "rule_median": 292.4,
+    "model_mean": 322.5,
+    "ks": 0.018,
+    "wasserstein": 5.1
+  },
+  "saccade_amp": {
+    "rule_mean": 227.1,
+    "ks": 0.159
+  },
+  "transition_matrix_distance": 1.511,
+  "participant_trait_ranges": {
+    "reading_speed_factor": [
+      0.445,
+      1.338
+    ],
+    "regression_tendency": [
+      0.029,
+      0.238
+    ],
+    "fixation_noise_sd": [
+      0.5,
+      14.408
+    ],
+    "missing_rate": [
+      0.0,
+      0.08
+    ]
+  }
+}
