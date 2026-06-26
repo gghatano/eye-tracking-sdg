@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>正方形領域の合成視線データ — CLE モデル可視化デモ</title>
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --ink:#e6edf3; --muted:#9aa7b4; --accent:#58a6ff; --line:#222b36; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,"Hiragino Sans","Noto Sans JP",sans-serif;
+         background:var(--bg); color:var(--ink); }
+  header { padding:20px 24px 8px; }
+  h1 { font-size:18px; margin:0 0 4px; font-weight:650; }
+  .sub { color:var(--muted); font-size:13px; line-height:1.6; }
+  .sub a { color:var(--accent); text-decoration:none; }
+  .wrap { display:flex; gap:18px; padding:16px 24px 28px; flex-wrap:wrap; align-items:flex-start; }
+  .stage { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  canvas { display:block; border-radius:8px; background:#0b0e13; }
+  .side { flex:1; min-width:260px; max-width:380px; display:flex; flex-direction:column; gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .card h2 { font-size:13px; margin:0 0 10px; color:var(--muted); font-weight:600; letter-spacing:.02em; text-transform:uppercase; }
+  .row { display:flex; justify-content:space-between; font-size:13px; padding:4px 0; border-bottom:1px dashed var(--line); }
+  .row:last-child { border-bottom:none; }
+  .row b { font-variant-numeric:tabular-nums; font-weight:600; }
+  .controls { display:flex; flex-wrap:wrap; gap:8px; }
+  button { background:#21262d; color:var(--ink); border:1px solid var(--line); border-radius:8px;
+           padding:8px 12px; font-size:13px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.active { background:var(--accent); color:#06121f; border-color:var(--accent); font-weight:600; }
+  label.toggle { display:flex; align-items:center; gap:7px; font-size:13px; color:var(--muted); cursor:pointer; padding:3px 0; }
+  .slider { display:flex; align-items:center; gap:10px; font-size:12px; color:var(--muted); }
+  input[type=range] { flex:1; accent-color:var(--accent); }
+  .legend { font-size:12px; color:var(--muted); line-height:1.7; }
+  .swatch { display:inline-block; width:11px; height:11px; border-radius:50%; vertical-align:-1px; margin-right:6px; }
+  code { background:#0b0e13; padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>正方形領域の合成視線データ — 数理モデルによる可視化デモ</h1>
+  <div class="sub">
+    モデル: <b>Constrained Lévy Exploration (CLE)</b> — Boccignone &amp; Ferraro (2004),
+    <i>"Modelling gaze shift as a constrained random walk"</i>, Physica&nbsp;A&nbsp;331.<br>
+    サリエンシー地形に制約された Lévy フライト（重い裾の跳躍）+ 固視微動 (Ornstein–Uhlenbeck) で
+    1000×1000&nbsp;px の正方形上の視線を合成。<span id="seedline"></span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="stage">
+    <canvas id="cv" width="640" height="640"></canvas>
+  </div>
+
+  <div class="side">
+    <div class="card">
+      <h2>表示</h2>
+      <div class="controls" id="layers">
+        <button data-layer="saliency" class="active">サリエンシー</button>
+        <button data-layer="scanpath" class="active">スキャンパス</button>
+        <button data-layer="fixations" class="active">注視点</button>
+        <button data-layer="heatmap">ヒートマップ</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>再生（raw gaze 250&nbsp;Hz）</h2>
+      <div class="controls">
+        <button id="play">▶ 再生</button>
+        <button id="reset">⏮ 最初へ</button>
+      </div>
+      <div class="slider" style="margin-top:12px;">
+        <span>時刻</span>
+        <input type="range" id="seek" min="0" max="100" value="0">
+        <span id="tlabel" style="min-width:62px; text-align:right;">0.0 s</span>
+      </div>
+      <div class="slider" style="margin-top:8px;">
+        <span>速度</span>
+        <input type="range" id="speed" min="1" max="20" value="6">
+        <span id="splabel" style="min-width:62px; text-align:right;">×6</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>統計</h2>
+      <div id="stats"></div>
+    </div>
+
+    <div class="card">
+      <h2>凡例</h2>
+      <div class="legend">
+        <span class="swatch" style="background:#2dd4bf"></span>開始（時間順に色が変化）<br>
+        <span class="swatch" style="background:#f472b6"></span>終了<br>
+        円の大きさ = 注視時間 / 線 = サッケード（眼球の跳躍）<br>
+        背景の明るさ = サリエンシー（視線を引き寄せる顕著さ）
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA = /*__DATA__*/null;
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const S = DATA.square_px;
+const sx = x => x / S * W;
+const sy = y => y / S * H;
+
+const layers = { saliency:true, scanpath:true, fixations:true, heatmap:false };
+
+// 時間順カラー（teal -> blue -> pink）
+function turbo(t){
+  const a=[45,212,191], b=[88,166,255], c=[244,114,182];
+  const mix=(p,q,u)=>p.map((v,i)=>Math.round(v+(q[i]-v)*u));
+  const col = t<0.5 ? mix(a,b,t*2) : mix(b,c,(t-0.5)*2);
+  return `rgb(${col[0]},${col[1]},${col[2]})`;
+}
+
+function drawSaliency(){
+  const g = DATA.saliency_grid, res = g.length;
+  let max = 0;
+  for (const row of g) for (const v of row) if (v>max) max=v;
+  const cw = W/res, ch = H/res;
+  for (let j=0;j<res;j++) for (let i=0;i<res;i++){
+    const v = g[j][i]/max;
+    ctx.fillStyle = `rgba(88,166,255,${(v*v*0.45).toFixed(3)})`;
+    ctx.fillRect(i*cw, j*ch, cw+1, ch+1);
+  }
+}
+
+function drawHeatmap(){
+  // 注視点を注視時間で重み付けした密度ヒートマップ
+  const res = 80, acc = new Float32Array(res*res);
+  const sig = 2.4;
+  for (const f of DATA.fixations){
+    const gx = f.x/S*res, gy = f.y/S*res, w = f.duration_ms;
+    const r = 8;
+    for (let dy=-r;dy<=r;dy++) for (let dx=-r;dx<=r;dx++){
+      const ix=Math.round(gx+dx), iy=Math.round(gy+dy);
+      if (ix<0||iy<0||ix>=res||iy>=res) continue;
+      acc[iy*res+ix] += w*Math.exp(-(dx*dx+dy*dy)/(2*sig*sig));
+    }
+  }
+  let max=0; for (const v of acc) if (v>max) max=v;
+  const cw=W/res, ch=H/res;
+  for (let j=0;j<res;j++) for (let i=0;i<res;i++){
+    const v=acc[j*res+i]/max; if (v<0.02) continue;
+    let col;
+    if (v<0.5) col=[Math.round(30+v*2*200),Math.round(80+v*2*150),255];
+    else col=[255,Math.round(220-(v-0.5)*2*180),Math.round(120-(v-0.5)*2*120)];
+    ctx.fillStyle=`rgba(${col[0]},${col[1]},${col[2]},${(0.18+v*0.6).toFixed(3)})`;
+    ctx.fillRect(i*cw,j*ch,cw+1,ch+1);
+  }
+}
+
+function drawScanpath(upTo){
+  const F = DATA.fixations;
+  const n = upTo==null ? F.length : upTo;
+  ctx.lineWidth = 1.4;
+  for (let i=1;i<n;i++){
+    ctx.strokeStyle = turbo(i/F.length);
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.moveTo(sx(F[i-1].x), sy(F[i-1].y));
+    ctx.lineTo(sx(F[i].x), sy(F[i].y));
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawFixations(upTo){
+  const F = DATA.fixations;
+  const n = upTo==null ? F.length : upTo;
+  for (let i=0;i<n;i++){
+    const f=F[i];
+    const r = 3 + Math.sqrt(f.duration_ms) * 0.55;
+    ctx.beginPath();
+    ctx.arc(sx(f.x), sy(f.y), r, 0, 2*Math.PI);
+    ctx.fillStyle = turbo(i/F.length);
+    ctx.globalAlpha = 0.78;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,.35)';
+    ctx.stroke();
+  }
+}
+
+// raw gaze 再生状態
+let playing=false, rawIdx=0, speed=6;
+const RAW = DATA.raw_gaze;
+const T_END = RAW[RAW.length-1].t;
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  // 枠
+  ctx.strokeStyle='#2a3543'; ctx.lineWidth=1; ctx.strokeRect(0.5,0.5,W-1,H-1);
+  if (layers.saliency) drawSaliency();
+  if (layers.heatmap) drawHeatmap();
+  if (layers.scanpath) drawScanpath();
+  if (layers.fixations) drawFixations();
+
+  // 再生ヘッド（現在の視線位置と直近の軌跡）
+  if (rawIdx>0){
+    const tail=Math.max(0,rawIdx-60);
+    ctx.lineWidth=2;
+    for (let i=tail+1;i<rawIdx;i++){
+      const a=(i-tail)/(rawIdx-tail);
+      ctx.strokeStyle=`rgba(45,212,191,${a.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.moveTo(sx(RAW[i-1].x),sy(RAW[i-1].y));
+      ctx.lineTo(sx(RAW[i].x),sy(RAW[i].y));
+      ctx.stroke();
+    }
+    const p=RAW[rawIdx-1];
+    ctx.beginPath(); ctx.arc(sx(p.x),sy(p.y),6,0,2*Math.PI);
+    ctx.fillStyle = p.phase==='saccade' ? '#f59e0b' : '#2dd4bf';
+    ctx.fill();
+    ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+}
+
+function tick(){
+  if (!playing) return;
+  rawIdx = Math.min(RAW.length, rawIdx + speed);
+  updateSeek();
+  render();
+  if (rawIdx>=RAW.length){ playing=false; document.getElementById('play').textContent='▶ 再生'; }
+  else requestAnimationFrame(tick);
+}
+
+// --- UI 配線 ---
+document.querySelectorAll('#layers button').forEach(b=>{
+  b.onclick=()=>{ const k=b.dataset.layer; layers[k]=!layers[k]; b.classList.toggle('active',layers[k]); render(); };
+});
+const playBtn=document.getElementById('play');
+playBtn.onclick=()=>{
+  playing=!playing;
+  playBtn.textContent = playing ? '⏸ 一時停止' : '▶ 再生';
+  if (playing){ if (rawIdx>=RAW.length) rawIdx=0; requestAnimationFrame(tick); }
+};
+document.getElementById('reset').onclick=()=>{ rawIdx=0; playing=false; playBtn.textContent='▶ 再生'; updateSeek(); render(); };
+const seek=document.getElementById('seek');
+seek.oninput=()=>{ rawIdx=Math.round(seek.value/100*RAW.length); updateSeek(); render(); };
+const speedEl=document.getElementById('speed');
+speedEl.oninput=()=>{ speed=+speedEl.value; document.getElementById('splabel').textContent='×'+speed; };
+
+function updateSeek(){
+  seek.value = (rawIdx/RAW.length*100).toFixed(1);
+  const t = rawIdx>0 ? RAW[Math.min(rawIdx,RAW.length-1)].t : 0;
+  document.getElementById('tlabel').textContent = (t/1000).toFixed(1)+' s';
+}
+
+// 統計・ヘッダ
+function fillStats(){
+  const s=DATA.stats, p=DATA.params;
+  const rows=[
+    ['注視点数', s.n_fixations],
+    ['raw サンプル数', s.n_raw_samples.toLocaleString()],
+    ['総時間', (s.total_duration_ms/1000).toFixed(1)+' s'],
+    ['平均サッケード振幅', s.mean_saccade_amp_px+' px'],
+    ['最大サッケード振幅', s.max_saccade_amp_px+' px'],
+    ['Lévy 指数 α', p.alpha],
+    ['温度 T (制約強度)', p.temperature],
+    ['平均注視時間', p.fix_dur_mean_ms+' ms'],
+  ];
+  document.getElementById('stats').innerHTML =
+    rows.map(r=>`<div class="row"><span>${r[0]}</span><b>${r[1]}</b></div>`).join('');
+  document.getElementById('seedline').textContent = ` 乱数シード = ${DATA.seed}（再現可能）。`;
+}
+
+fillStats();
+updateSeek();
+render();
+</script>
+</body>
+</html>
